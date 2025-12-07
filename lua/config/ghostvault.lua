@@ -282,7 +282,7 @@ function M.git_actions()
 			M.open_ghost_commit()
 		elseif choice.cmd == "lazygit" then
 			if fn.executable("lazygit") == 1 then
-				vim.cmd("TermExec cmd='lazygit' direction=float name='GhostGit'")
+				vim.cmd("LazyGit")
 			else
 				vim.notify("LazyGit non trovato. Uso fallback.", vim.log.levels.WARN)
 				M.open_ghost_commit()

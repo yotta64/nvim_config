@@ -1,3 +1,5 @@
 
 # GhostVault
 .ghost/state.vim
+.ghost/identity.json
+.ghost/local.lua
