@@ -9,6 +9,7 @@ TODO: lazygit integration
 - [ ] inviare commit
 - [x] add task
 - [ ] another task
+- [ ] another task
 
 
 ## Appunti
