@@ -7,6 +7,8 @@ TODO: learn lua 🦉
 TODO: lazygit integration
 - [ ] raccogliere Task
 - [ ] inviare commit
+- [x] add task
+
 
 ## Appunti
 Ghost.nvim cheatsheet

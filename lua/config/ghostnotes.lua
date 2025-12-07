@@ -1277,44 +1277,55 @@ end
 
 local function parse_git_diff_tasks()
   local root = get_project_root()
-  local notes_dir_rel = ".ghost/notes" -- Path relativo per il filtro git
+  -- Usiamo il percorso relativo per il comando git
+  local notes_dir_rel = ".ghost/notes" 
   
-  -- Esegue git diff sulla cartella note per vedere cosa è cambiato rispetto all'ultimo commit
-  -- -U0: Zero righe di contesto (ci serve solo la riga cambiata)
-  -- --no-color: Per parsing facile
+  -- Debug 1: Verifichiamo il comando
   local cmd = string.format("git -C %s diff --no-color -U0 HEAD -- %s", root, notes_dir_rel)
+  -- vim.notify("GhostDebug CMD: " .. cmd, vim.log.levels.INFO) 
+
   local lines = fn.systemlist(cmd)
   
+  -- Debug 2: Verifichiamo se Git ha dato errore o output vuoto
+  if vim.v.shell_error ~= 0 then
+      vim.notify("GhostDebug Error: Git command failed!", vim.log.levels.ERROR)
+      return {}, {}
+  end
+  if #lines == 0 then
+      -- Se vedi questo messaggio, significa che per GIT non ci sono modifiche ai file note
+      -- vim.notify("GhostDebug: Nessuna modifica rilevata da Git nelle note.", vim.log.levels.WARN)
+      return {}, {}
+  end
+
   local added_tasks = {}
   local completed_tasks = {}
   local current_file = "unknown"
 
   for _, line in ipairs(lines) do
-    -- 1. Cattura il nome del file dal diff header
-    -- Esempio: "+++ b/.ghost/notes/todo.md"
+    -- Debug 3: Vediamo le righe grezze del diff
+    -- print("Diff Line: " .. line) 
+
+    -- 1. Cattura nome file (gestisce a/ b/ standard di git)
     local file_match = line:match("^%+%+%+ b/(.*)")
     if file_match then
-       current_file = fn.fnamemodify(file_match, ":t") -- Solo nome file
+       current_file = fn.fnamemodify(file_match, ":t")
     end
 
-    -- 2. Analizza le righe aggiunte/modificate (iniziano con +)
+    -- 2. Analizza righe aggiunte (+)
+    -- Escludiamo le righe che iniziano con +++ (header)
     if line:match("^%+") and not line:match("^%+%+%+") then
-        -- Puliamo la riga dal "+" iniziale
-        local content = line:sub(2)
+        local content = line:sub(2) -- Rimuovi il +
         
-        -- Cerca pattern task
+        -- Cerca checkbox
         local is_task = content:match("^%s*[-*]%s*%[")
         
         if is_task then
-            -- Estrai il testo
             local text = content:match("^%s*[-*]%s*%[[ xX]%]%s*(.*)")
             
-            -- Se è [x] o [X] -> Completato
             if content:match("^%s*[-*]%s*%[[xX]%]") then
                 if text then
                     table.insert(completed_tasks, string.format("- [x] %s (%s)", text, current_file))
                 end
-            -- Se è [ ] -> Nuovo / Aggiunto
             elseif content:match("^%s*[-*]%s*%[%s%]") then
                 if text then
                     table.insert(added_tasks, string.format("- [ ] %s (%s)", text, current_file))
