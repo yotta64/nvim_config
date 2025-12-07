@@ -38,6 +38,12 @@ local function get_project_name(root)
   return fn.fnamemodify(root, ":t")
 end
 
+-- FIX STORAGE: Calcola sempre il percorso locale .ghost/notes
+local function get_notes_dir()
+  local root = get_project_root()
+  return root .. "/.ghost/notes"
+end
+
 local function ensure_dir(path)
   if fn.isdirectory(path) == 0 then fn.mkdir(path, "p") end
 end
@@ -77,6 +83,28 @@ local function read_frontmatter(path)
   return meta, body
 end
 
+-- Helper per aggiornare il percorso file nel frontmatter (Relink)
+local function update_note_file_path(note_path, new_target_file)
+  local lines = fn.readfile(note_path)
+  local new_lines = {}
+  local changed = false
+  
+  for _, line in ipairs(lines) do
+    if not changed and line:match("^file:") then
+       table.insert(new_lines, "file: " .. new_target_file)
+       changed = true
+    else
+       table.insert(new_lines, line)
+    end
+  end
+  
+  if changed then
+     fn.writefile(new_lines, note_path)
+     return true
+  end
+  return false
+end
+
 local function format_preview_lines(body, max_lines)
   local lines = {}
   if not body or #body == 0 then return { "(empty note)" } end
@@ -103,7 +131,7 @@ local function format_preview_lines(body, max_lines)
   return lines
 end
 
--- === Helper UI Picker (CON PREVIEW) ===
+-- === Helper UI Picker (FIXED CRASH) ===
 local function pick_note_with_ui(prompt, items, on_choice)
   local ok, pickers = pcall(require, "telescope.pickers")
   if ok then
@@ -118,7 +146,7 @@ local function pick_note_with_ui(prompt, items, on_choice)
         results = items,
         entry_maker = function(item)
           return {
-            value = item,
+            value = item, 
             display = item.display,
             ordinal = item.ordinal or item.display,
             path = item.path, 
@@ -132,6 +160,8 @@ local function pick_note_with_ui(prompt, items, on_choice)
         actions.select_default:replace(function()
           actions.close(prompt_bufnr)
           local selection = action_state.get_selected_entry()
+          
+          -- FIX: Passiamo 'selection.value' (i dati veri), non 'selection' (il wrapper)
           if selection and selection.value then
             on_choice(selection.value)
           end
@@ -159,8 +189,9 @@ function M.reload_index()
   M.backlinks = {}
   M._project_root = get_project_root()
   
-  local proj_name = get_project_name(M._project_root)
-  local dir = notes_root .. "/" .. proj_name
+  -- Usa get_notes_dir per sicurezza
+  local dir = get_notes_dir()
+  
   if fn.isdirectory(dir) == 0 then return end
 
   local glob = fn.glob(dir .. "/*.md", false, true)
@@ -231,8 +262,24 @@ local function ensure_index()
 end
 
 -- ==============================
--- 3. Visualizzazione
+-- 3. Visualizzazione & Statusline
 -- ==============================
+
+local function count_notes_for_file(file)
+  if not M.index[file] then return 0 end
+  local count = 0
+  for _ in pairs(M.index[file]) do count = count + 1 end
+  return count
+end
+
+function M.statusline_component()
+  local file = api.nvim_buf_get_name(0)
+  if file == "" then return "" end
+  ensure_index()
+  local count = count_notes_for_file(file)
+  if count == 0 then return "" end
+  return string.format(" %d", count)
+end
 
 local function update_virtual_text_for_buffer(buf)
   api.nvim_buf_clear_namespace(buf, ns_virtual, 0, -1)
@@ -324,7 +371,8 @@ local function get_or_create_note_for_current_pos()
 
   local proj_root = get_project_root()
   local proj_name = get_project_name(proj_root)
-  local dir = notes_root .. "/" .. proj_name
+  
+  local dir = get_notes_dir()
   ensure_dir(dir)
 
   local base = fn.fnamemodify(file, ":t")
@@ -388,7 +436,8 @@ function M.link_current_line_to_existing()
     if not choice then return end
     local proj_root = get_project_root()
     local proj_name = get_project_name(proj_root)
-    local dir = notes_root .. "/" .. proj_name
+    
+    local dir = get_notes_dir()
     ensure_dir(dir)
     local ts = os.date("!%Y%m%dT%H%M%SZ")
     local filename = string.format("link_%s_%s.md", choice.id, ts)
@@ -479,9 +528,9 @@ function M.list_notes_for_current_file()
     table.insert(items, { 
         display = display, 
         ordinal = display,
-        path = data.path,  -- Per il preview
+        path = data.path,  
         line = 1, 
-        code_line = ln     -- Per il jump
+        code_line = ln     
     })
   end
   table.sort(items, function(a, b) return a.code_line < b.code_line end)
@@ -543,7 +592,7 @@ function M.goto_prev_note()
 end
 
 -- ==============================
--- 5. Task Manager & Backlinks (PARSER INTELLIGENTE)
+-- 5. Task Manager & Backlinks
 -- ==============================
 
 local function parse_tasks_from_file(path)
@@ -570,68 +619,52 @@ local function parse_tasks_from_file(path)
   local group_pushed = false
 
   for i, line in ipairs(lines) do
-    -- 1. TRIGGER TODO:
-    local todo_content = line:match("TODO:%s*(.*)$")
-
-    if todo_content then
-      local trigger_line = i
-      local title = vim.trim(todo_content)
-      
-      -- 2. LISTA SOTTOSTANTE
-      local list_items = {}
-      local j = i + 1
-      while j <= #lines do
-        local next_line = lines[j]
-        local is_item = next_line:match("^%s*[-*]%s*%[[^]]*%]")
-        
-        if is_item then
-           local is_done = next_line:match("^%s*[-*]%s*%[[xX]%]")
-           local text = next_line:match("^%s*[-*]%s*%[[^]]*%]%s*(.*)") or "Item"
-           table.insert(list_items, { text = text, done = (is_done ~= nil), line = j })
-        elseif next_line:match("^%s*$") then
-           -- skip empty
-        else
-           break
-        end
-        j = j + 1
-      end
-
-      -- 3. DECISIONE PRIORITÀ
-      local has_title = (title ~= "")
-      local has_list = (#list_items > 0)
-
-      if has_title then
-         -- CASO A/B: Titolo Presente -> Blocco (con o senza lista)
-         local done_count = 0
-         for _, it in ipairs(list_items) do if it.done then done_count = done_count + 1 end end
-         
-         table.insert(found_groups, {
-            type = "block",
-            title = title,
-            total = #list_items,
-            done = done_count,
-            line = trigger_line, 
-            path = path,
-            file = filename
-         })
-      elseif has_list then
-         -- CASO C: Solo Lista -> Task Singoli
-         for _, it in ipairs(list_items) do
-            table.insert(found_groups, {
-               type = "single",
-               title = it.text,
-               done = it.done,
-               line = it.line,
-               path = path,
-               file = filename
-            })
-         end
-      end
-      
-      i = j - 1
+    local header_title = line:match("^#+%s*(.+)")
+    local todo_label = line:match("^TODO:%s*(.*)")
+    
+    local new_title = nil
+    if todo_label then 
+        new_title = vim.trim(todo_label)
+    elseif header_title then
+        local t = header_title:match("TODO:%s*(.*)")
+        if t then new_title = vim.trim(t) end
     end
-    i = i + 1
+
+    if new_title then
+      if not current_group.title and current_group.total > 0 and not group_pushed then
+         table.insert(found_groups, vim.deepcopy(current_group))
+      end
+
+      current_group = {
+        title = (new_title == "") and "TODO" or new_title,
+        file = filename,
+        path = path,
+        line = i,
+        total = 0,
+        done = 0,
+        items = {}
+      }
+      group_pushed = false
+      table.insert(found_groups, current_group)
+      group_pushed = true
+    end
+
+    local is_checkbox = line:match("^%s*[-*]%s*%[[^]]*%]")
+    
+    if is_checkbox then
+      current_group.total = current_group.total + 1
+      local is_done = line:match("^%s*[-*]%s*%[[xX]%]")
+      if is_done then current_group.done = current_group.done + 1 end
+      local text = line:match("^%s*[-*]%s*%[[^]]*%]%s*(.*)") or "Item"
+      table.insert(current_group.items, { text = text, done = (is_done ~= nil), line = i })
+
+      if not current_group.title and not group_pushed then
+         table.insert(found_groups, current_group)
+         group_pushed = true
+      end
+    end
   end
+  
   return found_groups
 end
 
@@ -639,8 +672,8 @@ local function scan_todo_blocks()
   local tasks = {}
   local proj_root = get_project_root()
   
-  local proj_name = get_project_name(proj_root)
-  local dir = notes_root .. "/" .. proj_name
+  -- 1. Scan Note Codice (usa get_notes_dir)
+  local dir = get_notes_dir()
   if fn.isdirectory(dir) == 1 then
     local glob = fn.glob(dir .. "/*.md", false, true)
     for _, path in ipairs(glob) do
@@ -664,12 +697,21 @@ function M.list_project_tasks()
   if #tasks == 0 then vim.notify("Nessun task trovato.", vim.log.levels.INFO); return end
 
   table.sort(tasks, function(a, b)
-    local a_done = false
-    if a.type == "block" then a_done = (a.total > 0 and a.done == a.total) else a_done = a.done end
-    local b_done = false
-    if b.type == "block" then b_done = (b.total > 0 and b.done == b.total) else b_done = b.done end
+    local a_done = a.done or 0
+    local a_total = a.total or 0
+    local b_done = b.done or 0
+    local b_total = b.total or 0
+    
+    local a_complete = false
+    if a.title then a_complete = (a_total > 0 and a_done == a_total)
+    else a_complete = (a_done > 0) end
+    
+    local b_complete = false
+    if b.title then b_complete = (b_total > 0 and b_done == b_total)
+    else b_complete = (b_done > 0) end
 
-    if a_done ~= b_done then return not a_done end
+    if a_complete ~= b_complete then return not a_complete end
+    
     local af = a.file or ""
     local bf = b.file or ""
     return af < bf
@@ -679,7 +721,7 @@ function M.list_project_tasks()
   for _, t in ipairs(tasks) do
     local display = ""
     
-    if t.type == "block" then
+    if t.title then
         if t.total == 0 then
             local icon = "🎯" 
             display = string.format("%s %s (%s)", icon, t.title, t.file)
@@ -696,9 +738,11 @@ function M.list_project_tasks()
             table.insert(items, { display = display, path = t.path, line = t.line, ordinal = display })
         end
     else
-        local icon = t.done and "✅" or " "
-        display = string.format("%s %s (%s)", icon, t.title, t.file)
-        table.insert(items, { display = display, path = t.path, line = t.line, ordinal = display })
+        for _, it in ipairs(t.items) do
+            local icon = it.done and "✅" or " "
+            display = string.format("%s %s (%s)", icon, it.text, t.file)
+            table.insert(items, { display = display, path = t.path, line = it.line, ordinal = display })
+        end
     end
   end
 
@@ -712,6 +756,144 @@ function M.list_project_tasks()
        end
     end, 100)
   end)
+end
+
+-- ==============================
+-- 6. The Doctor & Search (Extras)
+-- ==============================
+
+function M.search_in_notes()
+  local proj_root = get_project_root()
+  local proj_name = get_project_name(proj_root)
+  
+  local dir = get_notes_dir()
+  
+  if fn.isdirectory(dir) == 0 then vim.notify("Nessuna nota trovata.", vim.log.levels.WARN); return end
+
+  local ok, builtin = pcall(require, "telescope.builtin")
+  if not ok then vim.notify("Serve Telescope.", vim.log.levels.ERROR); return end
+
+  builtin.live_grep({
+    prompt_title = "🔍 Brain Search (" .. proj_name .. ")",
+    cwd = dir,
+  })
+end
+
+function M.check_orphans_silent()
+  M.reload_index()
+  local orphans = 0
+  for _, note in pairs(M.notes_by_id) do
+    if note.type == "code_note" and note.file and note.file ~= "" then
+       if fn.filereadable(note.file) == 0 then orphans = orphans + 1 end
+    end
+  end
+  if orphans > 0 then
+     vim.notify("👻 GhostDoctor: Trovate " .. orphans .. " note orfane. Usa <leader>aD per fixare.", vim.log.levels.WARN)
+  end
+end
+
+function M.run_doctor()
+  M.reload_index()
+  local orphans = {}
+  for _, note in pairs(M.notes_by_id) do
+    if note.type == "code_note" and note.file and note.file ~= "" then
+       if fn.filereadable(note.file) == 0 then
+          table.insert(orphans, note)
+       end
+    end
+  end
+
+  if #orphans == 0 then vim.notify("GhostDoctor: Tutte le note sono sane! 💚", vim.log.levels.INFO); return end
+
+  local items = {}
+  for _, o in ipairs(orphans) do
+     table.insert(items, {
+        display = "⚠️ Orfana: " .. (o.title or o.id) .. " -> " .. o.file,
+        path = o.path,
+        note = o
+     })
+  end
+
+  pick_note_with_ui("Ghost Doctor (Seleziona per fixare)", items, function(choice)
+     if not choice then return end
+     
+     vim.ui.select({ "🗑️ Delete Note", "🔗 Relink to new file" }, { prompt = "Azione per " .. choice.note.id }, function(act)
+        if not act then return end
+        
+        if act:match("Delete") then
+           os.remove(choice.note.path)
+           vim.notify("Nota eliminata.", vim.log.levels.INFO)
+           M.reload_index()
+        elseif act:match("Relink") then
+           local ok, builtin = pcall(require, "telescope.builtin")
+           if ok then
+              builtin.find_files({
+                 prompt_title = "Seleziona nuovo file sorgente",
+                 attach_mappings = function(prompt_bufnr, map)
+                    local actions = require("telescope.actions")
+                    local action_state = require("telescope.actions.state")
+                    actions.select_default:replace(function()
+                        actions.close(prompt_bufnr)
+                        local sel = action_state.get_selected_entry()
+                        if sel then
+                           local new_path = sel.value
+                           if not new_path then new_path = sel[1] end
+                           
+                           if update_note_file_path(choice.note.path, new_path) then
+                              vim.notify("Nota ricollegata a: " .. new_path, vim.log.levels.INFO)
+                              M.reload_index()
+                           else
+                              vim.notify("Errore aggiornamento nota.", vim.log.levels.ERROR)
+                           end
+                        end
+                    end)
+                    return true
+                 end
+              })
+           else
+              vim.notify("Serve Telescope per il relink.", vim.log.levels.ERROR)
+           end
+        end
+     end)
+  end)
+end
+
+-- ==============================
+-- 7. File Move Handler (API Pubblica)
+-- ==============================
+
+function M.on_file_moved(old_path, new_path)
+  local proj_root = get_project_root()
+  
+  if not old_path:match("^/") then old_path = proj_root .. "/" .. old_path end
+  if not new_path:match("^/") then new_path = proj_root .. "/" .. new_path end
+
+  ensure_index()
+  local changes = 0
+
+  for _, note in pairs(M.notes_by_id) do
+    if note.type == "code_note" and note.file then
+       local note_target_abs = proj_root .. "/" .. note.file
+       
+       if note_target_abs == old_path then
+          local new_rel = fn.fnamemodify(new_path, ":.")
+          if update_note_file_path(note.path, new_rel) then
+             changes = changes + 1
+          end
+       elseif note_target_abs:sub(1, #old_path) == old_path then
+          local new_target_abs = new_path .. note_target_abs:sub(#old_path + 1)
+          local new_rel = fn.fnamemodify(new_target_abs, ":.")
+          if update_note_file_path(note.path, new_rel) then
+             changes = changes + 1
+          end
+       end
+    end
+  end
+
+  if changes > 0 then
+     vim.notify(string.format("GhostNotes: Aggiornate %d note dopo spostamento file.", changes), vim.log.levels.INFO)
+     M.reload_index()
+  end
 end
 
 -- ==============================
@@ -1015,36 +1197,7 @@ function M.show_ghost_under_cursor()
 end
 
 -- ==============================
--- 8. Ricerca Globale (The Brain)
--- ==============================
-
-function M.search_in_notes()
-  local proj_root = get_project_root()
-  local proj_name = get_project_name(proj_root)
-  local dir = notes_root .. "/" .. proj_name
-  
-  if fn.isdirectory(dir) == 0 then 
-      vim.notify("Nessuna nota trovata per questo progetto.", vim.log.levels.WARN)
-      return 
-  end
-
-  -- Usiamo il live_grep di Telescope limitato alla cartella delle note
-  local ok, builtin = pcall(require, "telescope.builtin")
-  if not ok then 
-      vim.notify("Questa funzione richiede Telescope.", vim.log.levels.ERROR)
-      return 
-  end
-
-  builtin.live_grep({
-    prompt_title = "🔍 Cerca nel Cervello (" .. proj_name .. ")",
-    cwd = dir,
-    -- Opzionale: argomenti extra per ripgrep per ignorare i file di sistema o metadati se vuoi
-    -- additional_args = function() return { "--hidden" } end 
-  })
-end
-
--- ==============================
--- 9. Setup & Mappings
+-- 8. Setup & Mappings
 -- ==============================
 
 function M.setup(opts)
@@ -1099,6 +1252,11 @@ function M.setup(opts)
     end,
   })
 
+  -- STARTUP CHECK: Silent Doctor
+  vim.schedule(function()
+     M.check_orphans_silent()
+  end)
+
   -- Keymappings
   vim.keymap.set("n", "<leader>an", M.add_or_edit_note_here, { desc = "Add/edit code note" })
   vim.keymap.set("n", "<leader>ak", M.link_current_line_to_existing, { desc = "Link existing note" })
@@ -1107,9 +1265,85 @@ function M.setup(opts)
   vim.keymap.set("n", "<leader>av", M.toggle_virtual_text, { desc = "Toggle virtual text" })
   vim.keymap.set("n", "<leader>at", M.list_project_tasks, { desc = "Ghost Tasks (TODO)" })
   vim.keymap.set("n", "<leader>ab", M.show_backlinks_for_current_note, { desc = "Ghost Backlinks" })
-  vim.keymap.set("n", "<leader>as", M.search_in_notes, { desc = "Search text in GhostNotes" })
+  vim.keymap.set("n", "<leader>as", M.search_in_notes, { desc = "Search text in notes" })
+  vim.keymap.set("n", "<leader>aD", M.run_doctor, { desc = "Ghost Doctor (Fix orphans)" })
   vim.keymap.set("n", "]n", M.goto_next_note, { desc = "Next note" })
   vim.keymap.set("n", "[n", M.goto_prev_note, { desc = "Prev note" })
+end
+
+-- ==============================
+-- 9. API per GhostCommit (Git Context)
+-- ==============================
+
+local function parse_git_diff_tasks()
+  local root = get_project_root()
+  local notes_dir_rel = ".ghost/notes" -- Path relativo per il filtro git
+  
+  -- Esegue git diff sulla cartella note per vedere cosa è cambiato rispetto all'ultimo commit
+  -- -U0: Zero righe di contesto (ci serve solo la riga cambiata)
+  -- --no-color: Per parsing facile
+  local cmd = string.format("git -C %s diff --no-color -U0 HEAD -- %s", root, notes_dir_rel)
+  local lines = fn.systemlist(cmd)
+  
+  local added_tasks = {}
+  local completed_tasks = {}
+  local current_file = "unknown"
+
+  for _, line in ipairs(lines) do
+    -- 1. Cattura il nome del file dal diff header
+    -- Esempio: "+++ b/.ghost/notes/todo.md"
+    local file_match = line:match("^%+%+%+ b/(.*)")
+    if file_match then
+       current_file = fn.fnamemodify(file_match, ":t") -- Solo nome file
+    end
+
+    -- 2. Analizza le righe aggiunte/modificate (iniziano con +)
+    if line:match("^%+") and not line:match("^%+%+%+") then
+        -- Puliamo la riga dal "+" iniziale
+        local content = line:sub(2)
+        
+        -- Cerca pattern task
+        local is_task = content:match("^%s*[-*]%s*%[")
+        
+        if is_task then
+            -- Estrai il testo
+            local text = content:match("^%s*[-*]%s*%[[ xX]%]%s*(.*)")
+            
+            -- Se è [x] o [X] -> Completato
+            if content:match("^%s*[-*]%s*%[[xX]%]") then
+                if text then
+                    table.insert(completed_tasks, string.format("- [x] %s (%s)", text, current_file))
+                end
+            -- Se è [ ] -> Nuovo / Aggiunto
+            elseif content:match("^%s*[-*]%s*%[%s%]") then
+                if text then
+                    table.insert(added_tasks, string.format("- [ ] %s (%s)", text, current_file))
+                end
+            end
+        end
+    end
+  end
+  
+  return added_tasks, completed_tasks
+end
+
+function M.get_commit_context_summary()
+  local added, completed = parse_git_diff_tasks()
+  local summary = {}
+  
+  if #completed > 0 then
+     table.insert(summary, "### ✅ Completed Tasks")
+     for _, t in ipairs(completed) do table.insert(summary, t) end
+     table.insert(summary, "")
+  end
+
+  if #added > 0 then
+     table.insert(summary, "### 🆕 Added/Modified Tasks")
+     for _, t in ipairs(added) do table.insert(summary, t) end
+     table.insert(summary, "")
+  end
+  
+  return summary
 end
 
 return M

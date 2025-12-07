@@ -95,5 +95,5 @@ local function toggle_floating_focus()
   end
 end
 
-vim.keymap.set("n", "<leader>M", toggle_floating_focus, { desc = "Floating focus mode (with overlay)" })
+vim.keymap.set("n", "<leader>M", toggle_floating_focus, { desc = "󱂬 Floating focus mode (with overlay)" })
 
