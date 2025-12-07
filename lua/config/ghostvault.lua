@@ -111,34 +111,54 @@ end
 -- ============================================================
 
 local function execute_commit(buf)
-	local lines = api.nvim_buf_get_lines(buf, 0, -1, false)
-	local title = vim.trim(lines[1] or "")
+  local lines = api.nvim_buf_get_lines(buf, 0, -1, false)
+  local title = vim.trim(lines[1] or "")
+  
+  if title == "" then
+     vim.notify("Commit annullato: Titolo vuoto.", vim.log.levels.WARN)
+     return
+  end
 
-	if title == "" then
-		vim.notify("Commit annullato: Titolo vuoto.", vim.log.levels.WARN)
-		return
-	end
+  local msg = title
+  if #lines > 1 then
+     local body = table.concat(lines, "\n", 2)
+     msg = msg .. "\n\n" .. body
+  end
 
-	-- Costruiamo il messaggio: Titolo + \n\n + Corpo
-	local msg = title
-	if #lines > 1 then
-		-- Rimuoviamo righe di commento generate automaticamente se vuoi
-		-- Per ora prendiamo tutto ciò che non è vuoto
-		local body = table.concat(lines, "\n", 2)
-		msg = msg .. "\n\n" .. body
-	end
-
-	-- Eseguiamo git commit (richiede che i file siano già staged!)
-	-- Usiamo vim.fn.system per catturare l'output
-	local cmd = string.format("git commit -m %s", vim.fn.shellescape(msg))
-	local output = fn.system(cmd)
-
-	if vim.v.shell_error == 0 then
-		vim.notify("✅ Commit Eseguito!\n" .. output, vim.log.levels.INFO)
-		vim.cmd("bd! " .. buf) -- Chiudi buffer
-	else
-		vim.notify("❌ Errore Commit:\n" .. output, vim.log.levels.ERROR)
-	end
+  -- FIX: Chiedi a git status se c'è qualcosa in stage
+  local status = fn.system("git diff --cached --quiet")
+  local exit_code = vim.v.shell_error
+  
+  -- Se exit_code è 0, significa che NON ci sono differenze in stage (quindi stage vuoto)
+  -- Se è 1, c'è roba pronta.
+  
+  if exit_code == 0 then
+      -- Stage vuoto! Proviamo a fare 'git commit -a'? O chiediamo?
+      -- Per sicurezza, facciamo -a solo sui file tracciati (update)
+      -- Oppure usiamo 'git add .' se siamo coraggiosi.
+      
+      -- Strategia sicura: Usa 'git commit -a -m ...' che stagea i file modificati (non i nuovi untracked)
+      local cmd = string.format('git commit -a -m %s', vim.fn.shellescape(msg))
+      local output = fn.system(cmd)
+      
+      if vim.v.shell_error == 0 then
+          vim.notify("✅ Commit (All) Eseguito!\n" .. output, vim.log.levels.INFO)
+          vim.cmd("bd! " .. buf)
+      else
+          vim.notify("❌ Errore (Forse file nuovi non tracciati? Usa 'git add'):\n" .. output, vim.log.levels.ERROR)
+      end
+  else
+      -- C'è roba in stage, usa commit normale
+      local cmd = string.format('git commit -m %s', vim.fn.shellescape(msg))
+      local output = fn.system(cmd)
+      
+      if vim.v.shell_error == 0 then
+          vim.notify("✅ Commit Eseguito!\n" .. output, vim.log.levels.INFO)
+          vim.cmd("bd! " .. buf)
+      else
+          vim.notify("❌ Errore Commit:\n" .. output, vim.log.levels.ERROR)
+      end
+  end
 end
 
 function M.open_ghost_commit()

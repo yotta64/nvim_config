@@ -1277,57 +1277,45 @@ end
 
 local function parse_git_diff_tasks()
   local root = get_project_root()
-  -- Usiamo il percorso relativo per il comando git
-  local notes_dir_rel = ".ghost/notes" 
+  -- Usiamo path relativo semplice. Assumiamo che il comando venga lanciato dalla root.
+  local notes_dir = ".ghost/notes" 
   
-  -- Debug 1: Verifichiamo il comando
-  local cmd = string.format("git -C %s diff --no-color -U0 HEAD -- %s", root, notes_dir_rel)
-  -- vim.notify("GhostDebug CMD: " .. cmd, vim.log.levels.INFO) 
-
+  -- Eseguiamo il diff rispetto a HEAD su tutta la cartella delle note.
+  -- unified=0 per avere solo le righe cambiate senza contesto.
+  local cmd = string.format("git -C %s diff HEAD --unified=0 -- %s", root, notes_dir)
   local lines = fn.systemlist(cmd)
   
-  -- Debug 2: Verifichiamo se Git ha dato errore o output vuoto
-  if vim.v.shell_error ~= 0 then
-      vim.notify("GhostDebug Error: Git command failed!", vim.log.levels.ERROR)
-      return {}, {}
-  end
-  if #lines == 0 then
-      -- Se vedi questo messaggio, significa che per GIT non ci sono modifiche ai file note
-      -- vim.notify("GhostDebug: Nessuna modifica rilevata da Git nelle note.", vim.log.levels.WARN)
-      return {}, {}
-  end
+  if vim.v.shell_error ~= 0 then return {}, {} end
 
   local added_tasks = {}
   local completed_tasks = {}
   local current_file = "unknown"
 
   for _, line in ipairs(lines) do
-    -- Debug 3: Vediamo le righe grezze del diff
-    -- print("Diff Line: " .. line) 
-
-    -- 1. Cattura nome file (gestisce a/ b/ standard di git)
+    -- Cattura il nome del file (es: +++ b/.ghost/notes/foo.md)
     local file_match = line:match("^%+%+%+ b/(.*)")
     if file_match then
        current_file = fn.fnamemodify(file_match, ":t")
     end
 
-    -- 2. Analizza righe aggiunte (+)
-    -- Escludiamo le righe che iniziano con +++ (header)
+    -- Cerca righe aggiunte (+) che contengono un task
     if line:match("^%+") and not line:match("^%+%+%+") then
         local content = line:sub(2) -- Rimuovi il +
         
-        -- Cerca checkbox
+        -- Cerca: - [ ] o - [x]
         local is_task = content:match("^%s*[-*]%s*%[")
         
         if is_task then
+            -- Estrai il testo dopo le quadre
             local text = content:match("^%s*[-*]%s*%[[ xX]%]%s*(.*)")
             
-            if content:match("^%s*[-*]%s*%[[xX]%]") then
-                if text then
+            if text then
+                -- Logica: 
+                -- Se è [x], l'abbiamo completato (o creato già fatto).
+                -- Se è [ ], l'abbiamo aggiunto nuovo.
+                if content:match("%[[xX]%]") then
                     table.insert(completed_tasks, string.format("- [x] %s (%s)", text, current_file))
-                end
-            elseif content:match("^%s*[-*]%s*%[%s%]") then
-                if text then
+                elseif content:match("%[%s%]") then
                     table.insert(added_tasks, string.format("- [ ] %s (%s)", text, current_file))
                 end
             end
@@ -1343,13 +1331,13 @@ function M.get_commit_context_summary()
   local summary = {}
   
   if #completed > 0 then
-     table.insert(summary, "### ✅ Completed Tasks")
+     table.insert(summary, "# ✅ Completed Tasks")
      for _, t in ipairs(completed) do table.insert(summary, t) end
      table.insert(summary, "")
   end
 
   if #added > 0 then
-     table.insert(summary, "### 🆕 Added/Modified Tasks")
+     table.insert(summary, "# 🆕 Added Tasks")
      for _, t in ipairs(added) do table.insert(summary, t) end
      table.insert(summary, "")
   end
