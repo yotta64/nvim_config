@@ -175,8 +175,8 @@ function M.open_ghost_commit()
 	end
 
 	if ok and gn and gn.get_commit_context_summary then
-		local tasks = gn.get_commit_context_summary()
-		if #tasks > 0 then
+		local context_lines = gn.get_commit_context_summary()
+		if #context_lines > 0 then
 			table.insert(summary_lines, "")
 			for _, t in ipairs(context_lines) do
 				table.insert(summary_lines, t)
