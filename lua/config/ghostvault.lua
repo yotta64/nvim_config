@@ -542,21 +542,21 @@ local function get_git_status_items()
         
         if x == "?" and y == "?" then
             status = "untracked"
-            icon = "🔴 "
+            icon = "🔴"
             hl = "DiagnosticError" -- Rosso
         elseif x ~= " " and y ~= " " then
             status = "partial"
-            icon = "🟡 " -- Dot (Modified)
+            icon = "🟡" -- Dot (Modified)
             hl = "DiagnosticWarn" -- Giallo/Arancio
         elseif x ~= " " then
             -- STAGED (Pronto per il commit)
             status = "staged"
-            icon = "🟢✚ " -- Plus (Added/Staged)
+            icon = "🟢" -- Plus (Added/Staged)
             hl = "DiagnosticOk" -- Verde (o String)
         elseif y ~= " " then
             -- UNSTAGED (Modificato ma non aggiunto)
             status = "unstaged"
-            icon = "🟡 "
+            icon = "🟡"
             hl = "DiagnosticWarn" -- Giallo
         end
 
