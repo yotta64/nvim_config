@@ -602,70 +602,64 @@ local function parse_tasks_from_file(path)
   for l in f:lines() do table.insert(lines, l) end
   f:close()
 
-  local found_groups = {}
+  local found_tasks = {}
   local filename = fn.fnamemodify(path, ":t")
   if filename == "scratchpad.md" then filename = "LAVAGNA" end
-  
-  local current_group = {
-    title = nil, 
-    file = filename, 
-    path = path,
-    line = 1,
-    total = 0, 
-    done = 0,
-    items = {} 
-  }
-  
-  local group_pushed = false
 
-  for i, line in ipairs(lines) do
-    local header_title = line:match("^#+%s*(.+)")
+  local i = 1
+  while i <= #lines do
+    local line = lines[i]
+
     local todo_label = line:match("^TODO:%s*(.*)")
-    
-    local new_title = nil
-    if todo_label then 
-        new_title = vim.trim(todo_label)
-    elseif header_title then
-        local t = header_title:match("TODO:%s*(.*)")
-        if t then new_title = vim.trim(t) end
+    if not todo_label then
+      todo_label = line:match("^#+%s*TODO:%s*(.*)")
     end
 
-    if new_title then
-      if not current_group.title and current_group.total > 0 and not group_pushed then
-         table.insert(found_groups, vim.deepcopy(current_group))
+    if todo_label ~= nil then
+      local group_name = vim.trim(todo_label or "")
+      local j = i + 1
+      local list_found = false
+
+      while j <= #lines do
+        local list_line = lines[j]
+        local mark, text = list_line:match("^%s*[-*]%s*%[([xX ])%]%s*(.*)")
+        if not mark then break end
+
+        local is_done = (mark:lower() == "x")
+        local task_text = vim.trim(text or "")
+        if task_text == "" then task_text = "Item" end
+
+        table.insert(found_tasks, {
+          text = task_text,
+          group = (group_name ~= "" and group_name) or nil,
+          done = is_done,
+          file = filename,
+          path = path,
+          line = j,
+        })
+
+        list_found = true
+        j = j + 1
       end
 
-      current_group = {
-        title = (new_title == "") and "TODO" or new_title,
-        file = filename,
-        path = path,
-        line = i,
-        total = 0,
-        done = 0,
-        items = {}
-      }
-      group_pushed = false
-      table.insert(found_groups, current_group)
-      group_pushed = true
-    end
-
-    local is_checkbox = line:match("^%s*[-*]%s*%[[^]]*%]")
-    
-    if is_checkbox then
-      current_group.total = current_group.total + 1
-      local is_done = line:match("^%s*[-*]%s*%[[xX]%]")
-      if is_done then current_group.done = current_group.done + 1 end
-      local text = line:match("^%s*[-*]%s*%[[^]]*%]%s*(.*)") or "Item"
-      table.insert(current_group.items, { text = text, done = (is_done ~= nil), line = i })
-
-      if not current_group.title and not group_pushed then
-         table.insert(found_groups, current_group)
-         group_pushed = true
+      if not list_found and group_name ~= "" then
+        table.insert(found_tasks, {
+          text = group_name,
+          group = nil,
+          done = false,
+          file = filename,
+          path = path,
+          line = i,
+        })
       end
+
+      i = j
+    else
+      i = i + 1
     end
   end
-  
-  return found_groups
+
+  return found_tasks
 end
 
 local function scan_todo_blocks()
@@ -697,53 +691,23 @@ function M.list_project_tasks()
   if #tasks == 0 then vim.notify("Nessun task trovato.", vim.log.levels.INFO); return end
 
   table.sort(tasks, function(a, b)
-    local a_done = a.done or 0
-    local a_total = a.total or 0
-    local b_done = b.done or 0
-    local b_total = b.total or 0
-    
-    local a_complete = false
-    if a.title then a_complete = (a_total > 0 and a_done == a_total)
-    else a_complete = (a_done > 0) end
-    
-    local b_complete = false
-    if b.title then b_complete = (b_total > 0 and b_done == b_total)
-    else b_complete = (b_done > 0) end
-
-    if a_complete ~= b_complete then return not a_complete end
-    
+    if a.done ~= b.done then return not a.done end
+    local ag = a.group or ""
+    local bg = b.group or ""
+    if ag ~= bg then return ag < bg end
     local af = a.file or ""
     local bf = b.file or ""
-    return af < bf
+    if af ~= bf then return af < bf end
+    return (a.line or 0) < (b.line or 0)
   end)
 
   local items = {}
   for _, t in ipairs(tasks) do
-    local display = ""
-    
-    if t.title then
-        if t.total == 0 then
-            local icon = "🎯" 
-            display = string.format("%s %s (%s)", icon, t.title, t.file)
-            table.insert(items, { display = display, path = t.path, line = t.line, ordinal = display })
-        else
-            local percent = math.floor((t.done / t.total) * 100)
-            local icon = "📝"
-            if t.done == t.total then icon = "✅"
-            elseif percent < 30 then icon = "🔴"
-            elseif percent < 70 then icon = "🟡"
-            else icon = "🟢"
-            end
-            display = string.format("%s [%d/%d] %s (%s)", icon, t.done, t.total, t.title, t.file)
-            table.insert(items, { display = display, path = t.path, line = t.line, ordinal = display })
-        end
-    else
-        for _, it in ipairs(t.items) do
-            local icon = it.done and "✅" or " "
-            display = string.format("%s %s (%s)", icon, it.text, t.file)
-            table.insert(items, { display = display, path = t.path, line = it.line, ordinal = display })
-        end
-    end
+    local icon = t.done and "🟢" or "🔴"
+    local label = t.text or "Task"
+    if t.group then label = string.format("%s — %s", t.group, label) end
+    local display = string.format("%s %s [%s:%d]", icon, label, t.file or "", t.line or 1)
+    table.insert(items, { display = display, path = t.path, line = t.line or 1, ordinal = display })
   end
 
   pick_note_with_ui("Ghost Tasks", items, function(choice)
@@ -1136,10 +1100,9 @@ function M.open_note_floating(path, no_redirect)
   })
 
   vim.keymap.set("n", "q", close_and_save, { buffer = buf, silent = true })
-  vim.keymap.set("n", "<Esc>", close_and_save, { buffer = buf, silent = true })
   vim.keymap.set("n", "<leader>ax", function() M.insert_note_link_via_picker() end, { buffer = buf, silent = true })
-  vim.keymap.set("n", "af", function() M.follow_link_under_cursor() end, { buffer = buf, silent = true })
-  vim.keymap.set("n", "gd", M.jump_to_code_context, { buffer = buf, silent = true })
+  vim.keymap.set("n", "<leader>af", function() M.follow_link_under_cursor() end, { buffer = buf, silent = true })
+  vim.keymap.set("n", "<leader>ao", M.jump_to_code_context, { buffer = buf, silent = true })
 
   note_focus.win = win; note_focus.buf = buf; note_focus.overlay = overlay_win
   M.highlight_links_in_buffer(buf)

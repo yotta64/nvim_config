@@ -15,7 +15,7 @@ opt.shiftwidth = 2
 opt.tabstop = 2
 opt.smartindent = true
 
-opt.wrap = false
+opt.wrap = true
 opt.scrolloff = 4
 opt.sidescrolloff = 8
 
