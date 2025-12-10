@@ -595,15 +595,10 @@ end
 -- 5. Task Manager & Backlinks
 -- ==============================
 
-local function parse_tasks_from_file(path)
-  local f = io.open(path, "r")
-  if not f then return {} end
-  local lines = {}
-  for l in f:lines() do table.insert(lines, l) end
-  f:close()
-
+local function parse_tasks_from_lines(lines, path)
   local found_tasks = {}
-  local filename = fn.fnamemodify(path, ":t")
+  local filename = fn.fnamemodify(path or "", ":t")
+  if filename == "" then filename = path or "" end
   if filename == "scratchpad.md" then filename = "LAVAGNA" end
 
   local i = 1
@@ -660,6 +655,16 @@ local function parse_tasks_from_file(path)
   end
 
   return found_tasks
+end
+
+local function parse_tasks_from_file(path)
+  local f = io.open(path, "r")
+  if not f then return {} end
+  local lines = {}
+  for l in f:lines() do table.insert(lines, l) end
+  f:close()
+
+  return parse_tasks_from_lines(lines, path)
 end
 
 local function scan_todo_blocks()
@@ -1238,59 +1243,71 @@ end
 -- 9. API per GhostCommit (Git Context)
 -- ==============================
 
-local function parse_git_diff_tasks()
+local function build_task_key(task)
+  local group = task.group or ""
+  local text = task.text or ""
+  local file = task.file or ""
+  return string.format("%s||%s||%s", group, text, file)
+end
+
+local function load_head_tasks()
   local root = get_project_root()
-  -- Usiamo path relativo semplice. Assumiamo che il comando venga lanciato dalla root.
-  local notes_dir = ".ghost/notes" 
-  
-  -- Eseguiamo il diff rispetto a HEAD su tutta la cartella delle note.
-  -- unified=0 per avere solo le righe cambiate senza contesto.
-  local cmd = string.format("git -C %s diff HEAD --unified=0 -- %s", root, notes_dir)
-  local lines = fn.systemlist(cmd)
-  
-  if vim.v.shell_error ~= 0 then return {}, {} end
+  local root_esc = fn.shellescape(root)
+  local cmd = string.format("git -C %s ls-tree -r --name-only HEAD -- %s %s", root_esc, ".ghost/notes", ".ghost/scratchpad.md")
+  local tracked_files = fn.systemlist(cmd)
+  if vim.v.shell_error ~= 0 then return {} end
 
-  local added_tasks = {}
-  local completed_tasks = {}
-  local current_file = "unknown"
-
-  for _, line in ipairs(lines) do
-    -- Cattura il nome del file (es: +++ b/.ghost/notes/foo.md)
-    local file_match = line:match("^%+%+%+ b/(.*)")
-    if file_match then
-       current_file = fn.fnamemodify(file_match, ":t")
-    end
-
-    -- Cerca righe aggiunte (+) che contengono un task
-    if line:match("^%+") and not line:match("^%+%+%+") then
-        local content = line:sub(2) -- Rimuovi il +
-        
-        -- Cerca: - [ ] o - [x]
-        local is_task = content:match("^%s*[-*]%s*%[")
-        
-        if is_task then
-            -- Estrai il testo dopo le quadre
-            local text = content:match("^%s*[-*]%s*%[[ xX]%]%s*(.*)")
-            
-            if text then
-                -- Logica: 
-                -- Se è [x], l'abbiamo completato (o creato già fatto).
-                -- Se è [ ], l'abbiamo aggiunto nuovo.
-                if content:match("%[[xX]%]") then
-                    table.insert(completed_tasks, string.format("- [x] %s (%s)", text, current_file))
-                elseif content:match("%[%s%]") then
-                    table.insert(added_tasks, string.format("- [ ] %s (%s)", text, current_file))
-                end
-            end
-        end
+  local tasks = {}
+  for _, rel_path in ipairs(tracked_files) do
+    if rel_path ~= "" then
+      local show_cmd = string.format("git -C %s show HEAD:%s", root_esc, fn.shellescape(rel_path))
+      local content = fn.systemlist(show_cmd)
+      local ok = (vim.v.shell_error == 0)
+      if ok and content and #content > 0 then
+        local file_tasks = parse_tasks_from_lines(content, rel_path)
+        for _, t in ipairs(file_tasks) do table.insert(tasks, t) end
+      end
     end
   end
-  
-  return added_tasks, completed_tasks
+
+  return tasks
 end
 
 function M.get_commit_context_summary()
-  local added, completed = parse_git_diff_tasks()
+  local current_tasks = scan_todo_blocks()
+  local head_tasks = load_head_tasks()
+  local head_map = {}
+
+  for _, t in ipairs(head_tasks) do
+    local key = build_task_key(t)
+    head_map[key] = head_map[key] or { todo = 0, done = 0 }
+    if t.done then head_map[key].done = head_map[key].done + 1 else head_map[key].todo = head_map[key].todo + 1 end
+  end
+
+  local added, completed = {}, {}
+
+  local function mark_seen(key, done)
+    local bucket = head_map[key]
+    if not bucket then return false end
+    if done and bucket.done > 0 then bucket.done = bucket.done - 1 return true end
+    if (not done) and bucket.todo > 0 then bucket.todo = bucket.todo - 1 return true end
+    return false
+  end
+
+  local function format_task(task)
+    local label = task.text or "Task"
+    if task.group then label = string.format("%s — %s", task.group, label) end
+    return string.format("- [%s] %s (%s)", task.done and "x" or " ", label, task.file or "")
+  end
+
+  for _, task in ipairs(current_tasks) do
+    local key = build_task_key(task)
+    if not mark_seen(key, task.done) then
+      if task.done then table.insert(completed, format_task(task))
+      else table.insert(added, format_task(task)) end
+    end
+  end
+
   local summary = {}
   
   if #completed > 0 then

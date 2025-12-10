@@ -4,7 +4,7 @@ local map = vim.keymap.set
 
 -- salvataggio / uscita / buffer
 map("n", "<c-s>", "<cmd>w<CR>", { desc = " Save" })
-map("n", "<c-q>", "<cmd>wqa<CR>", { desc = " Quit window" })
+map("n", "<c-q>", "<cmd>qa<CR>", { desc = " Quit window" })
 map("n", "<leader>-", "<cmd>split<CR>", { desc = " split horizontally" })
 map("n", "<leader>_", "<cmd>vsplit<CR>", { desc = " split vertically" })
 map("n", "<leader>k", "<Cmd>wincmd k<CR>", { desc = "⬅ move to the left" })
