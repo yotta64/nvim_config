@@ -5,7 +5,7 @@ Right now it's a just a  test, but i think it's coming out pretty cool, if i see
 
 ## 👻Ghost Nvim
 
-right now, there are two main additions: *GhostNotes* and *GhostVault*. Right now, they share functions and paths; but i might keep them separated in the future.
+right now, there are two main additions: *GhostNotes* and *GhostVault*. They share functions and paths; but i might keep them separated in the future.
 i'll list the features of each one:
 ### GhostNotes
 this plugin creates post-it like notes inside the file. It's a more advanced and complete way of commenting your code. Inside notes you can write in markdown (in my config i'm using markview to make it render better, in my opinion it doesn't really make sense without it) and add tasks. each note is saved as a file in a cache folder initiated by `GhostVault`, i'll get to that later. Each note's file saves the anchot it is attached to (file, line) and an ID, used to create links and navigate through notes. For most of the functions i'm using telescope to render the result; i'm planning to make it optional, at the moment i've added fallbacks for just a few functions. Right now it features:
